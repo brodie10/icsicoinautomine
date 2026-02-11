@@ -1,0 +1,100 @@
+services:
+  user-node:
+    image: icsi-node:latest
+    build: .
+    container_name: user-node
+    environment:
+      - STUN_IP=127.0.0.1
+      - STUN_PORT=3478
+      - WEB_PORT=8080
+      - RPC_PORT=9340
+    ports:
+      - "8080:8080"
+      - "9341:9341"
+      - "9342:9342"
+    volumes:
+      - ./wallet_data:/app/wallet_data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    command: [ "--port", "9341", "--bind", "0.0.0.0", "--web-port", "8080", "--rpcport", "9342", "--addnode", "127.0.0.1:9333", "--datadir", "/app/wallet_data" ]
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+
+  explorer:
+    image: icsi-node:latest
+    container_name: explorer
+    environment:
+      - PYTHONPATH=/app
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./wallet_data:/app/data:ro
+    entrypoint: [ "python3", "/app/explorer/app.py" ] 
+    depends_on:
+      - user-node
+
+  miner:
+    image: icsi-node:latest
+    container_name: miner
+    depends_on:
+      - user-node
+    restart: always
+    entrypoint: 
+      - /bin/sh
+      - -c
+      - |
+        echo "Waiting 15s for the node to wake up..."
+        sleep 15
+        echo "Starting Miner..."
+        python3 /app/miner.py --url http://user-node:9342 --user brodiebulmanauto --pass BrodieBulmanCoin123!\$ --address 565abdc316a63ae102a0945c3b6a6821bd67f83b
+
+  # === PROTECTED AUTO-UPDATER ===
+  auto-updater:
+    image: docker:cli
+    container_name: auto-updater
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/app
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        apk add --no-cache git bash >/dev/null 2>&1
+        git config --global --add safe.directory /app
+        echo "Protected Auto-Updater Online."
+        
+        # Setup Git if missing
+        cd /app
+        if [ ! -d ".git" ]; then
+          git init
+          git remote add origin https://github.com/androidteacher/iCSI_Coin_2026.git
+          git fetch --all
+        fi
+
+        while true; do
+          cd /app
+          # 1. VAULT: Backup your files
+          mkdir -p /tmp/vault
+          [ -f "InvisibleMiner.vbs" ] && cp InvisibleMiner.vbs /tmp/vault/
+          [ -f "StartMiner.bat" ] && cp StartMiner.bat /tmp/vault/
+          [ -f "docker-compose.yml" ] && cp docker-compose.yml /tmp/vault/
+          
+          # 2. UPDATE: Force Pull
+          git fetch --all
+          git reset --hard origin/main >/dev/null 2>&1
+          
+          # 3. RESTORE: Put your files back
+          [ -f "/tmp/vault/InvisibleMiner.vbs" ] && cp -f /tmp/vault/InvisibleMiner.vbs .
+          [ -f "/tmp/vault/StartMiner.bat" ] && cp -f /tmp/vault/StartMiner.bat .
+          [ -f "/tmp/vault/docker-compose.yml" ] && cp -f /tmp/vault/docker-compose.yml .
+          
+          # 4. RESTART Services
+          docker restart user-node miner explorer
+          sleep 300
+        done
